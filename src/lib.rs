@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +27,14 @@ pub enum Payload {
     Generate(Generate),
     GenerateOk(GenerateOk),
 
+    Broadcast(Broadcast),
+    BroadcastOk(BroadcastOk),
+
+    Read(Read),
+    ReadOk(ReadOk),
+
+    Topology(Topology),
+    TopologyOk(TopologyOk),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,10 +74,47 @@ pub struct GenerateOk {
     pub id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Broadcast {
+    pub msg_id: usize,
+    pub message: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BroadcastOk {
+    pub msg_id: usize,
+    pub in_reply_to: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Read {
+    pub msg_id: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReadOk {
+    pub msg_id: usize,
+    pub in_reply_to: usize,
+    pub messages: Vec<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Topology {
+    pub msg_id: usize,
+    pub topology: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TopologyOk {
+    pub msg_id: usize,
+    pub in_reply_to: usize,
+}
+
 #[derive(Debug)]
 pub struct Node {
     pub node_id: String,
     pub next_msg_id: usize,
+    pub seen_messages: Vec<i64>,
 }
 
 impl Node {
@@ -75,6 +122,7 @@ impl Node {
         Self {
             node_id: "UNKNOWN_NODE".to_string(),
             next_msg_id: 0,
+            seen_messages: Vec::new(),
         }
     }
 
@@ -99,17 +147,15 @@ impl Node {
             }
             Payload::InitOk(_) => panic!("didn't expect init_ok message"),
 
-            Payload::Echo(Echo { msg_id, echo }) => {
-                Some(Message {
-                    src: self.node_id.clone(),
-                    dest: message.src.clone(),
-                    body: Payload::EchoOk(EchoOk{
-                        msg_id: self.next_msg_id,
-                        in_reply_to: *msg_id,
-                        echo: echo.clone(),
-                    }),
-                })
-            },
+            Payload::Echo(Echo { msg_id, echo }) => Some(Message {
+                src: self.node_id.clone(),
+                dest: message.src.clone(),
+                body: Payload::EchoOk(EchoOk {
+                    msg_id: self.next_msg_id,
+                    in_reply_to: *msg_id,
+                    echo: echo.clone(),
+                }),
+            }),
             Payload::EchoOk(_) => None,
 
             Payload::Generate(Generate { msg_id }) => {
@@ -125,9 +171,53 @@ impl Node {
                         id,
                     }),
                 })
-
-            },
+            }
             Payload::GenerateOk(_) => None,
+
+            Payload::Broadcast(Broadcast {
+                msg_id,
+                message: msg,
+            }) => {
+                self.seen_messages.push(*msg);
+
+                Some(Message {
+                    src: self.node_id.clone(),
+                    dest: message.src.clone(),
+                    body: Payload::BroadcastOk(BroadcastOk {
+                        msg_id: self.next_msg_id,
+                        in_reply_to: *msg_id,
+                    }),
+                })
+            }
+            Payload::BroadcastOk(_) => None,
+
+            Payload::Read(Read { msg_id }) => Some(Message {
+                src: self.node_id.clone(),
+                dest: message.src.clone(),
+                body: Payload::ReadOk(ReadOk {
+                    msg_id: self.next_msg_id,
+                    in_reply_to: *msg_id,
+                    messages: self.seen_messages.clone(),
+                }),
+            }),
+            Payload::ReadOk(_) => None,
+
+            Payload::Topology(Topology {
+                msg_id,
+                topology: _,
+            }) => {
+                // TODO: Store topology?
+
+                Some(Message {
+                    src: self.node_id.clone(),
+                    dest: message.src.clone(),
+                    body: Payload::TopologyOk(TopologyOk {
+                        msg_id: self.next_msg_id,
+                        in_reply_to: *msg_id,
+                    }),
+                })
+            }
+            Payload::TopologyOk(_) => None,
         }
     }
 }

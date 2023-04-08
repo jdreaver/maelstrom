@@ -18,6 +18,7 @@ $ rm maelstrom.tar.bz2
 $ cargo build
 $ ./maelstrom/maelstrom test -w echo --bin target/debug/main --node-count 1 --time-limit 10
 $ ./maelstrom/maelstrom test -w unique-ids --bin target/debug/main --time-limit 30 --rate 1000 --node-count 3 --availability total --nemesis partition
+$ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 1 --time-limit 20 --rate 10
 ```
 
 Start maelstrom server for debugging:
