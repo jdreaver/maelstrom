@@ -18,6 +18,8 @@ pub struct Message {
 pub enum Payload {
     Init(Init),
     InitOk(InitOk),
+    Echo(Echo),
+    EchoOk(EchoOk),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,6 +32,19 @@ pub struct Init {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InitOk {
     pub in_reply_to: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Echo {
+    pub msg_id: usize,
+    pub echo: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EchoOk {
+    pub msg_id: usize,
+    pub in_reply_to: usize,
+    pub echo: String,
 }
 
 #[derive(Debug)]
@@ -46,7 +61,7 @@ impl Node {
         }
     }
 
-    pub fn process_message(&mut self, message: &Message) -> Message {
+    pub fn process_message(&mut self, message: &Message) -> Option<Message> {
         // msg_id is monotonically increasing
         self.next_msg_id += 1;
 
@@ -57,15 +72,28 @@ impl Node {
                 node_ids: _,
             }) => {
                 self.node_id = node_id.clone();
-                Message {
+                Some(Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::InitOk(InitOk {
                         in_reply_to: *msg_id,
                     }),
-                }
+                })
             }
             Payload::InitOk(_) => panic!("didn't expect init_ok message"),
+            Payload::Echo(Echo { msg_id, echo }) => {
+                Some(Message {
+                    src: self.node_id.clone(),
+                    dest: message.src.clone(),
+                    body: Payload::EchoOk(EchoOk{
+                        msg_id: self.next_msg_id,
+                        in_reply_to: *msg_id,
+                        echo: echo.clone(),
+                    }),
+                })
+
+            },
+            Payload::EchoOk(_) => None,
         }
     }
 }

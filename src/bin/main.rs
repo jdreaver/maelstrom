@@ -21,9 +21,10 @@ fn main() -> Result<()> {
         let message: Message = serde_json::from_str(&line).wrap_err("failed deserializing Message")?;
 
         // Process message and write to stdout line
-        let response = node.process_message(&message);
-        let serialized = serde_json::to_string(&response).unwrap();
-        writeln!(writer, "{}", serialized).unwrap();
+        if let Some(response) = node.process_message(&message) {
+            let serialized = serde_json::to_string(&response).unwrap();
+            writeln!(writer, "{}", serialized).unwrap();
+        }
     }
 
     Ok(())
