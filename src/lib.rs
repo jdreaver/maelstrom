@@ -18,8 +18,13 @@ pub struct Message {
 pub enum Payload {
     Init(Init),
     InitOk(InitOk),
+
     Echo(Echo),
     EchoOk(EchoOk),
+
+    Generate(Generate),
+    GenerateOk(GenerateOk),
+
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,6 +50,18 @@ pub struct EchoOk {
     pub msg_id: usize,
     pub in_reply_to: usize,
     pub echo: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Generate {
+    pub msg_id: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GenerateOk {
+    pub msg_id: usize,
+    pub in_reply_to: usize,
+    pub id: String,
 }
 
 #[derive(Debug)]
@@ -81,6 +98,7 @@ impl Node {
                 })
             }
             Payload::InitOk(_) => panic!("didn't expect init_ok message"),
+
             Payload::Echo(Echo { msg_id, echo }) => {
                 Some(Message {
                     src: self.node_id.clone(),
@@ -91,9 +109,25 @@ impl Node {
                         echo: echo.clone(),
                     }),
                 })
-
             },
             Payload::EchoOk(_) => None,
+
+            Payload::Generate(Generate { msg_id }) => {
+                // The pair (node_id, next_msg_id) is unique
+                let id = format!("{}-{}", self.node_id, self.next_msg_id);
+
+                Some(Message {
+                    src: self.node_id.clone(),
+                    dest: message.src.clone(),
+                    body: Payload::GenerateOk(GenerateOk {
+                        msg_id: self.next_msg_id,
+                        in_reply_to: *msg_id,
+                        id,
+                    }),
+                })
+
+            },
+            Payload::GenerateOk(_) => None,
         }
     }
 }
