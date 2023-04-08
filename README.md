@@ -18,3 +18,11 @@ $ rm maelstrom.tar.bz2
 $ cargo build
 $ ./maelstrom/maelstrom test -w echo --bin target/debug/main --node-count 1 --time-limit 10
 ```
+
+Start maelstrom server for debugging:
+
+```
+$ ./maelstrom/maelstrom serve
+
+# Then go go localhost:8080 in a web browser
+```
