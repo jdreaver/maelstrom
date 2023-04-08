@@ -16,5 +16,5 @@ $ rm maelstrom.tar.bz2
 
 ```
 $ cargo build
-$ ./maelstrom/maelstrom <args>
+$ ./maelstrom/maelstrom test -w echo --bin target/debug/main --node-count 1 --time-limit 10
 ```
