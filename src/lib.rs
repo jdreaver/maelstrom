@@ -113,7 +113,7 @@ pub struct TopologyOk {
 #[derive(Debug)]
 pub struct Node {
     node_id: String,
-    next_msg_id: usize,
+    msg_id: MessageIdCounter,
     seen_messages: HashSet<i64>,
 
     /// Map from node ID to sibling node IDs
@@ -121,6 +121,23 @@ pub struct Node {
 
     /// Map from Node ID to pending messages for that node
     pending_messages: HashMap<String, NodePendingMessages>,
+}
+
+/// Ensures message IDs are unique and monotonically increasing.
+#[derive(Debug)]
+struct MessageIdCounter {
+    _next_msg_id: usize,
+}
+
+impl MessageIdCounter {
+    fn new() -> Self {
+        Self { _next_msg_id: 0 }
+    }
+
+    fn next_msg_id(&mut self) -> usize {
+        self._next_msg_id += 1;
+        self._next_msg_id
+    }
 }
 
 #[derive(Debug)]
@@ -139,23 +156,58 @@ impl NodePendingMessages {
             pending_message_id: None,
         }
     }
+
+    fn clear_broadcast_ok(&mut self, broadcast_ok_in_reply_to: usize) -> bool {
+        match self.pending_message_id {
+            None => {
+                eprintln!(
+                    "received broadcast_ok with message id {} but no messages were pending",
+                    broadcast_ok_in_reply_to
+                );
+                false
+            }
+            Some(pending_id) => {
+                if broadcast_ok_in_reply_to == pending_id {
+                    self.next_messages.pop_front();
+                    self.pending_message_id = None;
+                    true
+                } else {
+                    eprintln!(
+                        "WARN: got broadcast_ok for msg {}, but expected msg_id {}",
+                        broadcast_ok_in_reply_to, pending_id
+                    );
+                    false
+                }
+            }
+        }
+    }
+
+    fn broadcast_message(
+        &mut self,
+        src_node_id: &str,
+        dest_node_id: &str,
+        msg_id: &mut MessageIdCounter,
+    ) -> Option<Message> {
+        self.next_messages.front().map(|msg| Message {
+            src: src_node_id.to_string(),
+            dest: dest_node_id.to_string(),
+            body: Payload::Broadcast(Broadcast {
+                msg_id: self.pending_message_id.unwrap_or_else(|| msg_id.next_msg_id()),
+                message: *msg,
+            }),
+        })
+    }
 }
 
 impl Node {
     pub fn new() -> Self {
         Self {
             node_id: "UNKNOWN_NODE".to_string(),
-            next_msg_id: 0,
+            msg_id: MessageIdCounter::new(),
             seen_messages: HashSet::new(),
             topology: HashMap::new(),
             pending_messages: HashMap::new(),
         }
-    }
-
-    fn get_msg_id(&mut self) -> usize {
-        // msg_id is monotonically increasing
-        self.next_msg_id += 1;
-        self.next_msg_id
     }
 
     pub fn process_message(&mut self, message: &Message) -> Vec<Message> {
@@ -180,7 +232,7 @@ impl Node {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::EchoOk(EchoOk {
-                    msg_id: self.get_msg_id(),
+                    msg_id: self.msg_id.next_msg_id(),
                     in_reply_to: *msg_id,
                     echo: echo.clone(),
                 }),
@@ -189,7 +241,7 @@ impl Node {
 
             Payload::Generate(Generate { msg_id: caller_id }) => {
                 // The pair (node_id, next_msg_id) is unique
-                let msg_id = self.get_msg_id();
+                let msg_id = self.msg_id.next_msg_id();
                 let id = format!("{}-{}", self.node_id, msg_id);
 
                 vec![Message {
@@ -216,6 +268,10 @@ impl Node {
                     if let Some(peers) = peers {
                         let peers = peers.clone();
                         for peer in peers {
+                            if peer == message.src {
+                                // Don't send to the peer that just sent us this
+                                continue
+                            }
                             self.pending_messages
                                 .entry(peer.clone())
                                 .and_modify(|pending| pending.next_messages.push_back(*msg))
@@ -229,7 +285,7 @@ impl Node {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::BroadcastOk(BroadcastOk {
-                        msg_id: self.get_msg_id(),
+                        msg_id: self.msg_id.next_msg_id(),
                         in_reply_to: *msg_id,
                     }),
                 }]
@@ -237,30 +293,31 @@ impl Node {
             Payload::BroadcastOk(BroadcastOk {
                 msg_id: _,
                 in_reply_to,
-            }) => {
-                match self.pending_messages.get_mut(&message.src) {
-                    None => {
-                        eprintln!(
-                            "got broadcast_ok, but no pending messages for node: {:?}",
-                            message
-                        );
-                        vec![]
-                    }
-                    Some(mut pending) => {
-                        if Some(*in_reply_to) == pending.pending_message_id {
-                            // TODO clear first pending message, and also send
-                            // the next one immediately if it exists
-                        }
+            }) => match self.pending_messages.get_mut(&message.src) {
+                None => {
+                    eprintln!(
+                        "got broadcast_ok, but no pending messages for node: {:?}",
+                        message
+                    );
+                    vec![]
+                }
+                Some(pending) => {
+                    if pending.clear_broadcast_ok(*in_reply_to) {
+                        pending
+                            .broadcast_message(&self.node_id, &message.src, &mut self.msg_id)
+                            .into_iter()
+                            .collect()
+                    } else {
                         vec![]
                     }
                 }
-            }
+            },
 
             Payload::Read(Read { msg_id }) => vec![Message {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::ReadOk(ReadOk {
-                    msg_id: self.get_msg_id(),
+                    msg_id: self.msg_id.next_msg_id(),
                     in_reply_to: *msg_id,
                     messages: self.seen_messages.clone(),
                 }),
@@ -275,7 +332,7 @@ impl Node {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::TopologyOk(TopologyOk {
-                        msg_id: self.get_msg_id(),
+                        msg_id: self.msg_id.next_msg_id(),
                         in_reply_to: *msg_id,
                     }),
                 }]
@@ -285,19 +342,11 @@ impl Node {
     }
 
     pub fn pending_broadcasts(&mut self) -> Vec<Message> {
-        todo!()
-        // self.pending_messages
-        //     .iter_mut()
-        //     .flat_map(|(node, pending)| {
-        //         pending.next_messages.front().map(|msg| Message {
-        //             src: self.node_id.clone(),
-        //             dest: node.clone(),
-        //             body: Payload::Broadcast(Broadcast {
-        //                 msg_id: self.get_msg_id(),
-        //                 message: *msg,
-        //             }),
-        //         })
-        //     })
-        //     .collect()
+        self.pending_messages
+            .iter_mut()
+            .flat_map(|(node, pending)| {
+                pending.broadcast_message(&self.node_id, node, &mut self.msg_id)
+            })
+            .collect()
     }
 }

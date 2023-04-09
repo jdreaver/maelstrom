@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, StdoutLock, Write};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr};
 use crossbeam_channel::{bounded, select, tick, unbounded};
@@ -43,7 +43,8 @@ fn main() -> Result<()> {
     loop {
         select! {
             recv(ticker) -> _ => {
-
+                let messages = node.pending_broadcasts();
+                write_messages_stdout(&mut stdout, &messages);
             }
             recv(rcv_msg) -> message => {
                 let message = message.wrap_err("failed to receive message")?;
