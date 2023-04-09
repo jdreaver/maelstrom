@@ -1,3 +1,23 @@
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, clippy::cargo)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cargo_common_metadata,
+    clippy::implicit_hasher,
+    clippy::implicit_return,
+    clippy::match_same_arms,
+    clippy::missing_const_for_fn,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::module_name_repetitions,
+    clippy::multiple_crate_versions,
+    clippy::must_use_candidate,
+    clippy::new_without_default,
+    clippy::suboptimal_flops,
+    clippy::too_many_lines,
+    clippy::wildcard_imports
+)]
+
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -113,17 +133,17 @@ pub struct TopologyOk {
 /// Ensures message IDs are unique and monotonically increasing.
 #[derive(Debug)]
 struct MessageIdCounter {
-    _next_msg_id: usize,
+    next_msg_id: usize,
 }
 
 impl MessageIdCounter {
     fn new() -> Self {
-        Self { _next_msg_id: 0 }
+        Self { next_msg_id: 0 }
     }
 
-    fn next_msg_id(&mut self) -> usize {
-        self._next_msg_id += 1;
-        self._next_msg_id
+    fn get_next_msg_id(&mut self) -> usize {
+        self.next_msg_id += 1;
+        self.next_msg_id
     }
 }
 
@@ -145,10 +165,7 @@ impl PendingMessages {
 
     fn clear_broadcast_ok(&mut self, broadcast_ok_in_reply_to: usize) {
         match self.sent_messages.get(&broadcast_ok_in_reply_to) {
-            None => eprintln!(
-                "got a broadcast_ok with unexpected ID {}",
-                broadcast_ok_in_reply_to
-            ),
+            None => eprintln!("got a broadcast_ok with unexpected ID {broadcast_ok_in_reply_to}"),
             Some(node) => {
                 self.pending_nodes.remove(node);
             }
@@ -199,7 +216,7 @@ fn broadcast_to_node_message(
     message: i64,
     sent_messages: &mut HashMap<usize, (String, i64)>,
 ) -> Message {
-    let msg_id = msg_id_counter.next_msg_id();
+    let msg_id = msg_id_counter.get_next_msg_id();
     sent_messages.insert(msg_id, (dest_node_id.to_string(), message));
     Message {
         src: src_node_id.to_string(),
@@ -254,7 +271,7 @@ impl Node {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::EchoOk(EchoOk {
-                    msg_id: self.msg_id.next_msg_id(),
+                    msg_id: self.msg_id.get_next_msg_id(),
                     in_reply_to: *msg_id,
                     echo: echo.clone(),
                 }),
@@ -263,7 +280,7 @@ impl Node {
 
             Payload::Generate(Generate { msg_id: caller_id }) => {
                 // The pair (node_id, next_msg_id) is unique
-                let msg_id = self.msg_id.next_msg_id();
+                let msg_id = self.msg_id.get_next_msg_id();
                 let id = format!("{}-{}", self.node_id, msg_id);
 
                 vec![Message {
@@ -289,7 +306,7 @@ impl Node {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::BroadcastOk(BroadcastOk {
-                        msg_id: self.msg_id.next_msg_id(),
+                        msg_id: self.msg_id.get_next_msg_id(),
                         in_reply_to: *msg_id,
                     }),
                 }];
@@ -305,7 +322,9 @@ impl Node {
                                 // Don't send to the peer that just sent us this
                                 continue;
                             }
-                            self.pending_messages.pending_nodes.insert((peer.clone(), *msg));
+                            self.pending_messages
+                                .pending_nodes
+                                .insert((peer.clone(), *msg));
                             responses.push(self.pending_messages.broadcast_to_node(
                                 &self.node_id,
                                 &mut self.msg_id,
@@ -331,7 +350,7 @@ impl Node {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::ReadOk(ReadOk {
-                    msg_id: self.msg_id.next_msg_id(),
+                    msg_id: self.msg_id.get_next_msg_id(),
                     in_reply_to: *msg_id,
                     messages: self.seen_messages.clone(),
                 }),
@@ -339,14 +358,14 @@ impl Node {
             Payload::ReadOk(_) => vec![],
 
             Payload::Topology(Topology { msg_id, topology }) => {
-                eprintln!("got topology {:?}", topology);
+                eprintln!("got topology {topology:?}");
                 self.topology = topology.clone();
 
                 vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::TopologyOk(TopologyOk {
-                        msg_id: self.msg_id.next_msg_id(),
+                        msg_id: self.msg_id.get_next_msg_id(),
                         in_reply_to: *msg_id,
                     }),
                 }]
