@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     let (done, quit) = bounded::<()>(0);
 
     // Spawn timer thread to send ticks
-    let ticker = tick(Duration::from_millis(500));
+    let ticker = tick(Duration::from_millis(1000));
 
     // Spawn thread to receive messages
     let (send_msg, rcv_msg) = unbounded::<Message>();

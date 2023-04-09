@@ -153,6 +153,7 @@ impl PendingMessages {
                 self.pending_nodes.remove(node);
             }
         }
+        self.sent_messages.remove(&broadcast_ok_in_reply_to);
     }
 
     fn broadcast_messages(

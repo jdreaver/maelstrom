@@ -4,11 +4,9 @@ Doing this challenge <https://fly.io/dist-sys/> based on <https://github.com/jep
 
 ## TODO
 
-Part 3 here <https://fly.io/dist-sys/3c/>
-- Need to retry every second or so if we failed to broadcast. Could store a
-  pending list per peer.
-- Requires a bit of re-architecture with e.g. an input channel + a timer and an
-  output channel.
+Part d here <https://fly.io/dist-sys/3d/>
+- Consider topology changes, like star topology
+- Batch changes. Broadcast supports `Any` for the message. Send peers all pending messages for that peer?
 
 ## Installing maelstrom
 
@@ -35,6 +33,7 @@ $ ./maelstrom/maelstrom test -w unique-ids --bin target/debug/main --time-limit 
 $ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 1 --time-limit 20 --rate 10
 $ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 5 --time-limit 20 --rate 10
 $ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 5 --time-limit 20 --rate 10 --nemesis partition
+$ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 25 --time-limit 20 --rate 100 --latency 100
 ```
 
 Start maelstrom server for debugging:
