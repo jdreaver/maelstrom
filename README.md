@@ -2,6 +2,14 @@
 
 Doing this challenge <https://fly.io/dist-sys/> based on <https://github.com/jepsen-io/maelstrom>
 
+## TODO
+
+Part 3 here <https://fly.io/dist-sys/3c/>
+- Need to retry every second or so if we failed to broadcast. Could store a
+  pending list per peer.
+- Requires a bit of re-architecture with e.g. an input channel + a timer and an
+  output channel.
+
 ## Installing maelstrom
 
 <https://github.com/jepsen-io/maelstrom/blob/main/doc/01-getting-ready/index.md>
@@ -26,6 +34,7 @@ $ ./maelstrom/maelstrom test -w unique-ids --bin target/debug/main --time-limit 
 # Broadcast
 $ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 1 --time-limit 20 --rate 10
 $ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 5 --time-limit 20 --rate 10
+$ ./maelstrom/maelstrom test -w broadcast --bin target/debug/main --node-count 5 --time-limit 20 --rate 10 --nemesis partition
 ```
 
 Start maelstrom server for debugging:
