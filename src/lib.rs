@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -95,7 +95,7 @@ pub struct Read {
 pub struct ReadOk {
     pub msg_id: usize,
     pub in_reply_to: usize,
-    pub messages: Vec<i64>,
+    pub messages: HashSet<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,7 +114,10 @@ pub struct TopologyOk {
 pub struct Node {
     pub node_id: String,
     pub next_msg_id: usize,
-    pub seen_messages: Vec<i64>,
+    pub seen_messages: HashSet<i64>,
+
+    /// Map from node ID to sibling node IDs
+    pub topology: HashMap<String, Vec<String>>,
 }
 
 impl Node {
@@ -122,11 +125,12 @@ impl Node {
         Self {
             node_id: "UNKNOWN_NODE".to_string(),
             next_msg_id: 0,
-            seen_messages: Vec::new(),
+            seen_messages: HashSet::new(),
+            topology: HashMap::new(),
         }
     }
 
-    pub fn process_message(&mut self, message: &Message) -> Option<Message> {
+    pub fn process_message(&mut self, message: &Message) -> Vec<Message> {
         // msg_id is monotonically increasing
         self.next_msg_id += 1;
 
@@ -137,17 +141,17 @@ impl Node {
                 node_ids: _,
             }) => {
                 self.node_id = node_id.clone();
-                Some(Message {
+                vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::InitOk(InitOk {
                         in_reply_to: *msg_id,
                     }),
-                })
+                }]
             }
             Payload::InitOk(_) => panic!("didn't expect init_ok message"),
 
-            Payload::Echo(Echo { msg_id, echo }) => Some(Message {
+            Payload::Echo(Echo { msg_id, echo }) => vec![Message {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::EchoOk(EchoOk {
@@ -155,14 +159,14 @@ impl Node {
                     in_reply_to: *msg_id,
                     echo: echo.clone(),
                 }),
-            }),
-            Payload::EchoOk(_) => None,
+            }],
+            Payload::EchoOk(_) => vec![],
 
             Payload::Generate(Generate { msg_id }) => {
                 // The pair (node_id, next_msg_id) is unique
                 let id = format!("{}-{}", self.node_id, self.next_msg_id);
 
-                Some(Message {
+                vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::GenerateOk(GenerateOk {
@@ -170,28 +174,49 @@ impl Node {
                         in_reply_to: *msg_id,
                         id,
                     }),
-                })
+                }]
             }
-            Payload::GenerateOk(_) => None,
+            Payload::GenerateOk(_) => vec![],
 
             Payload::Broadcast(Broadcast {
                 msg_id,
                 message: msg,
             }) => {
-                self.seen_messages.push(*msg);
+                let is_new = self.seen_messages.insert(*msg);
 
-                Some(Message {
-                    src: self.node_id.clone(),
-                    dest: message.src.clone(),
-                    body: Payload::BroadcastOk(BroadcastOk {
-                        msg_id: self.next_msg_id,
-                        in_reply_to: *msg_id,
-                    }),
-                })
+                let mut responses = vec![
+                    // Respond to sender with BroadcastOk
+                    Message {
+                        src: self.node_id.clone(),
+                        dest: message.src.clone(),
+                        body: Payload::BroadcastOk(BroadcastOk {
+                            msg_id: self.next_msg_id,
+                            in_reply_to: *msg_id,
+                        }),
+                    },
+                ];
+
+                // Also broadcast message to all peers if it is new
+                if is_new {
+                    if let Some(peers) = self.topology.get(&self.node_id) {
+                        for peer in peers {
+                            responses.push(Message {
+                                src: self.node_id.clone(),
+                                dest: peer.clone(),
+                                body: Payload::Broadcast(Broadcast {
+                                    msg_id: self.next_msg_id,
+                                    message: *msg,
+                                }),
+                            })
+                        }
+                    }
+                }
+
+                responses
             }
-            Payload::BroadcastOk(_) => None,
+            Payload::BroadcastOk(_) => vec![],
 
-            Payload::Read(Read { msg_id }) => Some(Message {
+            Payload::Read(Read { msg_id }) => vec![Message {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::ReadOk(ReadOk {
@@ -199,25 +224,23 @@ impl Node {
                     in_reply_to: *msg_id,
                     messages: self.seen_messages.clone(),
                 }),
-            }),
-            Payload::ReadOk(_) => None,
+            }],
+            Payload::ReadOk(_) => vec![],
 
-            Payload::Topology(Topology {
-                msg_id,
-                topology: _,
-            }) => {
-                // TODO: Store topology?
+            Payload::Topology(Topology { msg_id, topology }) => {
+                eprintln!("got topology {:?}", topology);
+                self.topology = topology.clone();
 
-                Some(Message {
+                vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::TopologyOk(TopologyOk {
                         msg_id: self.next_msg_id,
                         in_reply_to: *msg_id,
                     }),
-                })
+                }]
             }
-            Payload::TopologyOk(_) => None,
+            Payload::TopologyOk(_) => vec![],
         }
     }
 }
