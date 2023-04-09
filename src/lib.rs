@@ -112,12 +112,12 @@ pub struct TopologyOk {
 
 #[derive(Debug)]
 pub struct Node {
-    pub node_id: String,
-    pub next_msg_id: usize,
-    pub seen_messages: HashSet<i64>,
+    node_id: String,
+    next_msg_id: usize,
+    seen_messages: HashSet<i64>,
 
     /// Map from node ID to sibling node IDs
-    pub topology: HashMap<String, Vec<String>>,
+    topology: HashMap<String, Vec<String>>,
 }
 
 impl Node {
@@ -130,10 +130,13 @@ impl Node {
         }
     }
 
-    pub fn process_message(&mut self, message: &Message) -> Vec<Message> {
+    fn get_msg_id(&mut self) -> usize {
         // msg_id is monotonically increasing
         self.next_msg_id += 1;
+        self.next_msg_id
+    }
 
+    pub fn process_message(&mut self, message: &Message) -> Vec<Message> {
         match &message.body {
             Payload::Init(Init {
                 msg_id,
@@ -155,23 +158,24 @@ impl Node {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::EchoOk(EchoOk {
-                    msg_id: self.next_msg_id,
+                    msg_id: self.get_msg_id(),
                     in_reply_to: *msg_id,
                     echo: echo.clone(),
                 }),
             }],
             Payload::EchoOk(_) => vec![],
 
-            Payload::Generate(Generate { msg_id }) => {
+            Payload::Generate(Generate { msg_id: caller_id }) => {
                 // The pair (node_id, next_msg_id) is unique
-                let id = format!("{}-{}", self.node_id, self.next_msg_id);
+                let msg_id = self.get_msg_id();
+                let id = format!("{}-{}", self.node_id, msg_id);
 
                 vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::GenerateOk(GenerateOk {
-                        msg_id: self.next_msg_id,
-                        in_reply_to: *msg_id,
+                        msg_id,
+                        in_reply_to: *caller_id,
                         id,
                     }),
                 }]
@@ -190,7 +194,7 @@ impl Node {
                         src: self.node_id.clone(),
                         dest: message.src.clone(),
                         body: Payload::BroadcastOk(BroadcastOk {
-                            msg_id: self.next_msg_id,
+                            msg_id: self.get_msg_id(),
                             in_reply_to: *msg_id,
                         }),
                     },
@@ -198,13 +202,15 @@ impl Node {
 
                 // Also broadcast message to all peers if it is new
                 if is_new {
-                    if let Some(peers) = self.topology.get(&self.node_id) {
+                    let peers = self.topology.get(&self.node_id);
+                    if let Some(peers) = peers {
+                        let peers = peers.clone();
                         for peer in peers {
                             responses.push(Message {
                                 src: self.node_id.clone(),
                                 dest: peer.clone(),
                                 body: Payload::Broadcast(Broadcast {
-                                    msg_id: self.next_msg_id,
+                                    msg_id: self.get_msg_id(),
                                     message: *msg,
                                 }),
                             })
@@ -220,7 +226,7 @@ impl Node {
                 src: self.node_id.clone(),
                 dest: message.src.clone(),
                 body: Payload::ReadOk(ReadOk {
-                    msg_id: self.next_msg_id,
+                    msg_id: self.get_msg_id(),
                     in_reply_to: *msg_id,
                     messages: self.seen_messages.clone(),
                 }),
@@ -235,7 +241,7 @@ impl Node {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::TopologyOk(TopologyOk {
-                        msg_id: self.next_msg_id,
+                        msg_id: self.get_msg_id(),
                         in_reply_to: *msg_id,
                     }),
                 }]
