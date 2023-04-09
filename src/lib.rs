@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -110,19 +110,6 @@ pub struct TopologyOk {
     pub in_reply_to: usize,
 }
 
-#[derive(Debug)]
-pub struct Node {
-    node_id: String,
-    msg_id: MessageIdCounter,
-    seen_messages: HashSet<i64>,
-
-    /// Map from node ID to sibling node IDs
-    topology: HashMap<String, Vec<String>>,
-
-    /// Map from Node ID to pending messages for that node
-    pending_messages: HashMap<String, NodePendingMessages>,
-}
-
 /// Ensures message IDs are unique and monotonically increasing.
 #[derive(Debug)]
 struct MessageIdCounter {
@@ -141,62 +128,96 @@ impl MessageIdCounter {
 }
 
 #[derive(Debug)]
-struct NodePendingMessages {
-    /// Messages that haven't been sent to the node
-    next_messages: VecDeque<i64>,
+struct PendingMessages {
+    pending_nodes: HashSet<(String, i64)>,
 
-    /// The message ID that was used to send the i64 at the front of the queue.
-    pending_message_id: Option<usize>,
+    // TODO Clear out old sent_messages periodically. Assume they are lost.
+    sent_messages: HashMap<usize, (String, i64)>,
 }
 
-impl NodePendingMessages {
+impl PendingMessages {
     fn new() -> Self {
         Self {
-            next_messages: VecDeque::new(),
-            pending_message_id: None,
+            pending_nodes: HashSet::new(),
+            sent_messages: HashMap::new(),
         }
     }
 
-    fn clear_broadcast_ok(&mut self, broadcast_ok_in_reply_to: usize) -> bool {
-        match self.pending_message_id {
-            None => {
-                eprintln!(
-                    "received broadcast_ok with message id {} but no messages were pending",
-                    broadcast_ok_in_reply_to
-                );
-                false
-            }
-            Some(pending_id) => {
-                if broadcast_ok_in_reply_to == pending_id {
-                    self.next_messages.pop_front();
-                    self.pending_message_id = None;
-                    true
-                } else {
-                    eprintln!(
-                        "WARN: got broadcast_ok for msg {}, but expected msg_id {}",
-                        broadcast_ok_in_reply_to, pending_id
-                    );
-                    false
-                }
+    fn clear_broadcast_ok(&mut self, broadcast_ok_in_reply_to: usize) {
+        match self.sent_messages.get(&broadcast_ok_in_reply_to) {
+            None => eprintln!(
+                "got a broadcast_ok with unexpected ID {}",
+                broadcast_ok_in_reply_to
+            ),
+            Some(node) => {
+                self.pending_nodes.remove(node);
             }
         }
     }
 
-    fn broadcast_message(
+    fn broadcast_messages(
         &mut self,
         src_node_id: &str,
-        dest_node_id: &str,
-        msg_id: &mut MessageIdCounter,
-    ) -> Option<Message> {
-        self.next_messages.front().map(|msg| Message {
-            src: src_node_id.to_string(),
-            dest: dest_node_id.to_string(),
-            body: Payload::Broadcast(Broadcast {
-                msg_id: self.pending_message_id.unwrap_or_else(|| msg_id.next_msg_id()),
-                message: *msg,
-            }),
-        })
+        msg_id_counter: &mut MessageIdCounter,
+    ) -> Vec<Message> {
+        self.pending_nodes
+            .iter()
+            .map(|(node, msg)| {
+                broadcast_to_node_message(
+                    src_node_id,
+                    msg_id_counter,
+                    node,
+                    *msg,
+                    &mut self.sent_messages,
+                )
+            })
+            .collect()
     }
+
+    fn broadcast_to_node(
+        &mut self,
+        src_node_id: &str,
+        msg_id_counter: &mut MessageIdCounter,
+        dest_node_id: &str,
+        message: i64,
+    ) -> Message {
+        broadcast_to_node_message(
+            src_node_id,
+            msg_id_counter,
+            dest_node_id,
+            message,
+            &mut self.sent_messages,
+        )
+    }
+}
+
+fn broadcast_to_node_message(
+    src_node_id: &str,
+    msg_id_counter: &mut MessageIdCounter,
+    dest_node_id: &str,
+    message: i64,
+    sent_messages: &mut HashMap<usize, (String, i64)>,
+) -> Message {
+    let msg_id = msg_id_counter.next_msg_id();
+    sent_messages.insert(msg_id, (dest_node_id.to_string(), message));
+    Message {
+        src: src_node_id.to_string(),
+        dest: dest_node_id.to_string(),
+        body: Payload::Broadcast(Broadcast { msg_id, message }),
+    }
+}
+
+#[derive(Debug)]
+pub struct Node {
+    node_id: String,
+    msg_id: MessageIdCounter,
+    seen_messages: HashSet<i64>,
+
+    /// Map from node ID to sibling node IDs
+    topology: HashMap<String, Vec<String>>,
+
+    /// Map from Node ID to pending messages for that node
+    pending_messages: PendingMessages,
 }
 
 impl Node {
@@ -206,7 +227,7 @@ impl Node {
             msg_id: MessageIdCounter::new(),
             seen_messages: HashSet::new(),
             topology: HashMap::new(),
-            pending_messages: HashMap::new(),
+            pending_messages: PendingMessages::new(),
         }
     }
 
@@ -262,56 +283,48 @@ impl Node {
             }) => {
                 let is_new = self.seen_messages.insert(*msg);
 
-                // Broadcast message to all peers if it is new
-                if is_new {
-                    let peers = self.topology.get(&self.node_id);
-                    if let Some(peers) = peers {
-                        let peers = peers.clone();
-                        for peer in peers {
-                            if peer == message.src {
-                                // Don't send to the peer that just sent us this
-                                continue
-                            }
-                            self.pending_messages
-                                .entry(peer.clone())
-                                .and_modify(|pending| pending.next_messages.push_back(*msg))
-                                .or_insert(NodePendingMessages::new());
-                        }
-                    }
-                }
-
                 // Respond to sender with BroadcastOk
-                vec![Message {
+                let mut responses = vec![Message {
                     src: self.node_id.clone(),
                     dest: message.src.clone(),
                     body: Payload::BroadcastOk(BroadcastOk {
                         msg_id: self.msg_id.next_msg_id(),
                         in_reply_to: *msg_id,
                     }),
-                }]
+                }];
+
+                // Broadcast message to all peers if it is new
+                if is_new {
+                    let peers = self.topology.get(&self.node_id);
+                    if let Some(peers) = peers {
+                        let peers = peers.clone();
+
+                        for peer in peers {
+                            if peer == message.src {
+                                // Don't send to the peer that just sent us this
+                                continue;
+                            }
+                            self.pending_messages.pending_nodes.insert((peer.clone(), *msg));
+                            responses.push(self.pending_messages.broadcast_to_node(
+                                &self.node_id,
+                                &mut self.msg_id,
+                                &peer,
+                                *msg,
+                            ));
+                        }
+                    }
+                }
+
+                responses
             }
+
             Payload::BroadcastOk(BroadcastOk {
                 msg_id: _,
                 in_reply_to,
-            }) => match self.pending_messages.get_mut(&message.src) {
-                None => {
-                    eprintln!(
-                        "got broadcast_ok, but no pending messages for node: {:?}",
-                        message
-                    );
-                    vec![]
-                }
-                Some(pending) => {
-                    if pending.clear_broadcast_ok(*in_reply_to) {
-                        pending
-                            .broadcast_message(&self.node_id, &message.src, &mut self.msg_id)
-                            .into_iter()
-                            .collect()
-                    } else {
-                        vec![]
-                    }
-                }
-            },
+            }) => {
+                self.pending_messages.clear_broadcast_ok(*in_reply_to);
+                vec![]
+            }
 
             Payload::Read(Read { msg_id }) => vec![Message {
                 src: self.node_id.clone(),
@@ -342,11 +355,9 @@ impl Node {
     }
 
     pub fn pending_broadcasts(&mut self) -> Vec<Message> {
+        // TODO: Clear out old pending messages
+
         self.pending_messages
-            .iter_mut()
-            .flat_map(|(node, pending)| {
-                pending.broadcast_message(&self.node_id, node, &mut self.msg_id)
-            })
-            .collect()
+            .broadcast_messages(&self.node_id, &mut self.msg_id)
     }
 }
